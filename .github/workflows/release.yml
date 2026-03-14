@@ -1,0 +1,42 @@
+name: Release FileGuard
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pikepdf Pillow chardet colorama patool yt-dlp tkinterdnd2 pyinstaller
+          brew install ffmpeg
+
+      - name: Build Mac app
+        run: |
+          pyinstaller --windowed \
+                      --name "FileGuard" \
+                      --add-data "formats.py:." \
+                      --add-data "scanner.py:." \
+                      --add-data "recovery.py:." \
+                      --add-data "reporter.py:." \
+                      --add-data "updater.py:." \
+                      fileguard_app.py
+          cd dist
+          zip -r FileGuard-mac.zip FileGuard.app
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/FileGuard-mac.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
