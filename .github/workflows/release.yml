@@ -1,42 +1,96 @@
-name: Release FileGuard
+name: Build and Release FileGuard
 
 on:
   push:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build-mac:
     runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Set up Python
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
-          pip install pikepdf Pillow chardet colorama patool yt-dlp tkinterdnd2 pyinstaller
-          brew install ffmpeg
+          brew install ffmpeg tesseract tesseract-lang create-dmg zbar
+
+      - name: Install Python dependencies
+        run: |
+          pip install \
+            pikepdf Pillow chardet colorama patool yt-dlp \
+            pytesseract pyzbar \
+            watchdog send2trash tkinterdnd2 pyinstaller
 
       - name: Build Mac app
         run: |
-          pyinstaller --windowed \
-                      --name "FileGuard" \
-                      --add-data "formats.py:." \
-                      --add-data "scanner.py:." \
-                      --add-data "recovery.py:." \
-                      --add-data "reporter.py:." \
-                      --add-data "updater.py:." \
-                      fileguard_app.py
-          cd dist
-          zip -r FileGuard-mac.zip FileGuard.app
+          pyinstaller \
+            --windowed \
+            --name "FileGuard" \
+            --add-data "formats.py:." \
+            --add-data "scanner.py:." \
+            --add-data "recovery.py:." \
+            --add-data "reporter.py:." \
+            --add-data "updater.py:." \
+            --add-data "fileguard_features.py:." \
+            --hidden-import "pikepdf" \
+            --hidden-import "pikepdf._core" \
+            --hidden-import "PIL" \
+            --hidden-import "PIL.Image" \
+            --hidden-import "PIL.ImageTk" \
+            --hidden-import "PIL.ExifTags" \
+            --hidden-import "chardet" \
+            --hidden-import "pytesseract" \
+            --hidden-import "pyzbar.pyzbar" \
+            --hidden-import "watchdog.observers" \
+            --hidden-import "watchdog.observers.fsevents" \
+            --hidden-import "watchdog.events" \
+            --hidden-import "send2trash" \
+            --hidden-import "patoolib" \
+            --hidden-import "tkinter" \
+            --hidden-import "tkinter.ttk" \
+            --hidden-import "tkinter.scrolledtext" \
+            --collect-all "pikepdf" \
+            --noconfirm \
+            fileguard_app.py
+
+      - name: Sign the app
+        run: |
+          xattr -cr dist/FileGuard.app
+          codesign --force --deep --sign - dist/FileGuard.app
+
+      - name: Build DMG
+        run: |
+          create-dmg \
+            --volname "FileGuard" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 128 \
+            --icon "FileGuard.app" 150 160 \
+            --hide-extension "FileGuard.app" \
+            --app-drop-link 450 160 \
+            --no-internet-enable \
+            "dist/FileGuard.dmg" \
+            "dist/FileGuard.app" || \
+          hdiutil create -volname FileGuard \
+            -srcfolder dist/FileGuard.app \
+            -ov -format UDZO \
+            dist/FileGuard.dmg
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: dist/FileGuard-mac.zip
+          files: dist/FileGuard.dmg
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

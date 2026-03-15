@@ -222,7 +222,7 @@ class FileGuardApp:
         self.scan_tree.column("verdict", width=70,  anchor="center")
         self.scan_tree.column("risk",    width=95,  anchor="center")
         self.scan_tree.column("name",    width=330)
-        self.scan_tree.column("size",    width=75,  anchor="right")
+        self.scan_tree.column("size",    width=75,  anchor="e")
         self.scan_tree.column("type",    width=75,  anchor="center")
 
         vsb = ttk.Scrollbar(list_frame, orient="vertical", command=self.scan_tree.yview)
@@ -1588,7 +1588,7 @@ class FileGuardApp:
         self.dup_tree.column("#0",   width=20)
         self.dup_tree.column("keep", width=60,  anchor="center")
         self.dup_tree.column("path", width=450)
-        self.dup_tree.column("size", width=80,  anchor="right")
+        self.dup_tree.column("size", width=80,  anchor="e")
         vsb = ttk.Scrollbar(list_frame, orient="vertical", command=self.dup_tree.yview)
         self.dup_tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
