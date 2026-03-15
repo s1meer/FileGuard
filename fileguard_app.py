@@ -408,7 +408,7 @@ class FileGuardApp:
         tk.Label(f, text="Repair log:", font=FONT_B, bg=BG, fg=TEXT).pack(anchor="w", padx=20, pady=(4,2))
 
         self.repair_log = scrolledtext.ScrolledText(f, font=FONT_SM, height=14,
-                                                     bg="#1e1e1e", fg="#d4d4d4", insertbackground="white",
+                                                     bg="#0d1117", fg="#58d68d", insertbackground="#58d68d",
                                                      relief="solid", bd=1,
                                                      state="disabled", padx=10, pady=8, wrap="word")
         self.repair_log.pack(fill="both", expand=True, padx=20, pady=(0,8))
@@ -481,7 +481,10 @@ class FileGuardApp:
 
     def _open_repaired_file(self):
         if self.repaired_output:
-            self._open_path(self.repaired_output)
+            if os.path.exists(self.repaired_output):
+                self._reveal_in_finder(self.repaired_output)
+            else:
+                self._open_path(self.repaired_output)
 
     # ── DOWNLOAD TAB ──────────────────────────────────────
 
@@ -500,13 +503,18 @@ class FileGuardApp:
         options_row = tk.Frame(f, bg=BG)
         options_row.pack(fill="x", padx=20, pady=(0,8))
         tk.Label(options_row, text="Quality:", font=FONT_B, bg=BG, fg=TEXT).pack(side="left")
-        self.dl_quality = tk.StringVar(value="Best quality (video+audio)")
+        self.dl_quality = tk.StringVar(value="1080p Full HD")
         quality_opts = [
-            "Best quality (video+audio)",
-            "Audio only (MP3)",
-            "720p",
+            "4K Ultra HD (2160p)",
+            "1080p Full HD",
+            "720p HD",
             "480p",
             "360p (small file)",
+            "Audio only — MP3 (best)",
+            "Audio only — MP3 (128kbps)",
+            "Audio only — WAV (lossless)",
+            "Audio only — FLAC (lossless)",
+            "Video only (no audio)",
         ]
         ttk.Combobox(options_row, textvariable=self.dl_quality, values=quality_opts,
                      font=FONT, width=28, state="readonly").pack(side="left", padx=(8,16))
@@ -533,7 +541,8 @@ class FileGuardApp:
 
         tk.Label(f, text="Download log:", font=FONT_B, bg=BG, fg=TEXT).pack(anchor="w", padx=20, pady=(4,2))
         self.dl_log = scrolledtext.ScrolledText(f, font=FONT_SM, height=12,
-                                                 bg="#1e1e1e", fg="#d4d4d4", insertbackground="white",
+                                                 bg="#0d1117", fg="#58d68d", insertbackground="#58d68d",
+                                                 selectbackground="#1f6feb", selectforeground="white",
                                                  relief="solid", bd=1,
                                                  state="disabled", padx=10, pady=8, wrap="word")
         self.dl_log.pack(fill="both", expand=True, padx=20, pady=(0,8))
@@ -628,7 +637,13 @@ class FileGuardApp:
                 is_archive_org = 'archive.org/details/' in url
                 is_video = any(s in url for s in VIDEO_SITES)
 
-                if is_archive_org:
+                if url.startswith('magnet:'):
+                    self.q.put(("dl_log", "Magnet link detected"))
+                    self.q.put(("dl_log", "Note: Requires torrent seeders — may be slow"))
+                    self._download_magnet(url, out_dir)
+                    return
+
+                elif is_archive_org:
                     self.q.put(("dl_log", "Detected: Internet Archive page"))
                     self.q.put(("dl_log", "Fetching file list from Archive.org API..."))
 
@@ -691,25 +706,30 @@ class FileGuardApp:
                     self.q.put(("dl_log", "Video site detected — using yt-dlp"))
 
                     fmt_map = {
-                        "Best quality (video+audio)":
-                            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
-                        "720p":
+                        "4K Ultra HD (2160p)":
+                            "bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160]+bestaudio/best",
+                        "1080p Full HD":
+                            "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+                        "720p HD":
                             "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]",
                         "480p":
                             "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]",
                         "360p (small file)": "best[height<=360]/worst",
-                        "Audio only (MP3)": "bestaudio/best",
+                        "Audio only — MP3 (best)": "bestaudio/best",
+                        "Audio only — MP3 (128kbps)": "bestaudio[abr<=128]/bestaudio/best",
+                        "Audio only — WAV (lossless)": "bestaudio/best",
+                        "Audio only — FLAC (lossless)": "bestaudio/best",
+                        "Video only (no audio)": "bestvideo[ext=mp4]/bestvideo/best",
                     }
-
                     opts = {
                         "outtmpl":              os.path.join(out_dir, "%(title)s.%(ext)s"),
                         "progress_hooks":       [progress_hook],
                         "quiet":                True,
                         "no_warnings":          True,
                         "nocheckcertificate":   True,
-                        "format":               fmt_map.get(quality, "best"),
-                        "merge_output_format":  "mp4",
                     }
+                    opts["format"] = fmt_map.get(quality, "best[ext=mp4]/best")
+                    opts["merge_output_format"] = "mp4"
 
                     if ffmpeg_path and os.path.exists(ffmpeg_path):
                         opts["ffmpeg_location"] = os.path.dirname(ffmpeg_path)
@@ -718,8 +738,21 @@ class FileGuardApp:
                         opts["format"] = "best[ext=mp4]/best"
                         self.q.put(("dl_log", "ffmpeg not found — using single-file format"))
 
-                    if quality == "Audio only (MP3)" and ffmpeg_path:
-                        opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}]
+                    # Audio-only post-processors
+                    if "MP3" in quality and ffmpeg_path and os.path.exists(ffmpeg_path):
+                        bitrate = "128" if "128kbps" in quality else "320"
+                        opts["postprocessors"] = [{"key": "FFmpegExtractAudio",
+                                                    "preferredcodec": "mp3",
+                                                    "preferredquality": bitrate}]
+                        opts.pop("merge_output_format", None)
+                    elif "WAV" in quality and ffmpeg_path and os.path.exists(ffmpeg_path):
+                        opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}]
+                        opts.pop("merge_output_format", None)
+                    elif "FLAC" in quality and ffmpeg_path and os.path.exists(ffmpeg_path):
+                        opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "flac"}]
+                        opts.pop("merge_output_format", None)
+                    elif "Video only" in quality:
+                        opts.pop("merge_output_format", None)
 
                     import yt_dlp
                     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -757,9 +790,42 @@ class FileGuardApp:
         self.dl_cancel_btn.config(state="disabled")
         self.dl_status.config(text="Cancelled")
 
+    def _reveal_in_finder(self, path):
+        """Reveal file in Finder (Mac) or Explorer (Win) with it selected."""
+        import subprocess, platform
+        system = platform.system()
+        if system == "Darwin":
+            if os.path.isfile(path):
+                subprocess.run(['open', '-R', path])
+            else:
+                subprocess.run(['open', path])
+        elif system == "Windows":
+            if os.path.isfile(path):
+                subprocess.run(['explorer', f'/select,{path}'])
+            else:
+                subprocess.run(['explorer', path])
+        else:
+            folder = path if os.path.isdir(path) else os.path.dirname(path)
+            subprocess.run(['xdg-open', folder])
+
+    def _open_dl_result(self):
+        path = getattr(self, 'dl_output_path', None)
+        if not path:
+            messagebox.showinfo("No file", "No downloaded file to open")
+            return
+        if os.path.isdir(path):
+            self._reveal_in_finder(path)
+        elif os.path.exists(path):
+            self._reveal_in_finder(path)
+        else:
+            parent = os.path.dirname(path)
+            if os.path.exists(parent):
+                self._reveal_in_finder(parent)
+            else:
+                messagebox.showinfo("Not found", f"File not found:\n{path}")
+
     def _open_downloaded_file(self):
-        if self.dl_output_path:
-            self._open_path(self.dl_output_path)
+        self._open_dl_result()
 
     # ── INFO TAB ──────────────────────────────────────────
 
@@ -948,6 +1014,8 @@ class FileGuardApp:
                     msg_text = msg[1]
                     self.repair_log.config(state="normal")
                     self.repair_log.insert("end", msg_text + "\n")
+                    self.repair_log.tag_add("green", "1.0", "end")
+                    self.repair_log.tag_config("green", foreground="#58d68d")
                     self.repair_log.see("end")
                     self.repair_log.config(state="disabled")
 
@@ -972,8 +1040,8 @@ class FileGuardApp:
                 elif kind == "dl_log":
                     self.dl_log.config(state="normal")
                     self.dl_log.insert("end", msg[1] + "\n")
-                    self.dl_log.tag_add("msg", "1.0", "end")
-                    self.dl_log.tag_config("msg", foreground="#d4d4d4")
+                    self.dl_log.tag_add("green", "1.0", "end")
+                    self.dl_log.tag_config("green", foreground="#58d68d")
                     self.dl_log.see("end")
                     self.dl_log.config(state="disabled")
 
@@ -1049,8 +1117,10 @@ class FileGuardApp:
                 elif kind == "ocr_done":
                     if hasattr(self, 'ocr_btn'):
                         self.ocr_btn.config(text="Extract Text", state="normal")
+                        self.ocr_result.config(state="normal")
                         self.ocr_result.delete("1.0", "end")
                         self.ocr_result.insert("1.0", msg[1] if msg[1] else "(No text found)")
+                        self.ocr_result.config(state="disabled", fg="black", bg="white")
 
                 elif kind == "ocr_error":
                     if hasattr(self, 'ocr_btn'):
@@ -1188,8 +1258,12 @@ class FileGuardApp:
         preview_area.pack(fill="both", expand=True, padx=20, pady=(0,4))
         self.preview_canvas = tk.Canvas(preview_area, bg="#222222", highlightthickness=0)
         self.preview_canvas.pack(fill="both", expand=True)
-        self.preview_text = scrolledtext.ScrolledText(preview_area, font=("Courier", 11),
-                                                       bg="#1e1e1e", fg="#d4d4d4",
+        self.preview_text = scrolledtext.ScrolledText(preview_area, font=("Helvetica", 13),
+                                                       bg="white", fg="#1a1a1a",
+                                                       insertbackground="black",
+                                                       relief="flat", bd=0,
+                                                       padx=20, pady=20, wrap="word",
+                                                       spacing1=2, spacing3=2,
                                                        state="disabled", height=20)
 
         self.preview_info = tk.Label(f, text="Select a file to preview", font=FONT_SM,
@@ -1769,29 +1843,74 @@ class FileGuardApp:
 
     def _run_ocr(self):
         path = self.ocr_path.get().strip()
-        if not os.path.exists(path):
-            messagebox.showerror("Not found", f"File not found:\n{path}")
+        if not path or not os.path.exists(path):
+            messagebox.showerror("Not found", "Select an image first")
             return
-        lang = self._ocr_lang_codes.get(self.ocr_lang_display.get(), "eng")
-        self.ocr_btn.config(text="Extracting...", state="disabled")
-        self.ocr_result.delete("1.0", "end")
-        self.ocr_result.insert("1.0", "Processing...")
 
-        def run():
+        lang = self._ocr_lang_codes.get(self.ocr_lang_display.get(), "eng")
+
+        self.ocr_btn.config(text="Extracting...", state="disabled")
+        self.ocr_result.config(state="normal")
+        self.ocr_result.delete("1.0", "end")
+        self.ocr_result.insert("1.0", "Extracting text...")
+        self.ocr_result.config(state="disabled", fg="black", bg="white")
+
+        def run_thread():
             try:
                 import pytesseract
-                tess_path = get_tesseract()
-                tessdata = get_tessdata()
-                if tess_path:
-                    pytesseract.pytesseract.tesseract_cmd = tess_path
-                if tessdata:
-                    os.environ['TESSDATA_PREFIX'] = tessdata
-                text = ocr_image(path, language=lang)
-                self.q.put(("ocr_done", text))
-            except Exception as e:
-                self.q.put(("ocr_error", str(e)))
+                from PIL import Image, ImageEnhance
 
-        threading.Thread(target=run, daemon=True).start()
+                # Set tesseract path
+                for tp in ['/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract',
+                           '/usr/bin/tesseract']:
+                    if os.path.exists(tp):
+                        pytesseract.pytesseract.tesseract_cmd = tp
+                        break
+                else:
+                    tess_path = get_tesseract()
+                    if tess_path:
+                        pytesseract.pytesseract.tesseract_cmd = tess_path
+
+                # Set tessdata
+                for td in [os.path.join(os.path.dirname(__file__), 'tessdata'),
+                           '/opt/homebrew/share/tessdata', '/usr/share/tessdata']:
+                    if os.path.exists(td):
+                        os.environ['TESSDATA_PREFIX'] = td
+                        break
+                else:
+                    tessdata = get_tessdata()
+                    if tessdata:
+                        os.environ['TESSDATA_PREFIX'] = tessdata
+
+                img = Image.open(path)
+                if img.mode not in ('RGB', 'L'):
+                    img = img.convert('RGB')
+
+                # Scale up small images for better accuracy
+                w, h = img.size
+                if w < 1000 or h < 1000:
+                    scale = max(2.0, 1500.0 / min(w, h))
+                    img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+                # Enhance contrast
+                img = ImageEnhance.Contrast(img).enhance(1.5)
+
+                cfg = r'--oem 3 --psm 3 -c preserve_interword_spaces=1'
+                text = pytesseract.image_to_string(img, lang=lang, config=cfg)
+
+                result = text.strip() or (
+                    "No text found.\n\nTips:\n"
+                    "• Use a clear, high-resolution image\n"
+                    "• Select the correct language\n"
+                    "• Make sure text is not blurry")
+
+                self.q.put(("ocr_done", result))
+            except ImportError:
+                self.q.put(("ocr_done", "pytesseract not installed.\nRun: pip3 install pytesseract"))
+            except Exception as e:
+                self.q.put(("ocr_done", f"OCR error: {e}"))
+
+        threading.Thread(target=run_thread, daemon=True).start()
 
     def _copy_ocr_text(self):
         text = self.ocr_result.get("1.0", "end").strip()
@@ -2334,6 +2453,91 @@ class FileGuardApp:
                 subprocess.call(["xdg-open", path])
         except Exception as e:
             messagebox.showerror("Error", f"Could not open file:\n{e}")
+
+    def _download_magnet(self, magnet_url, out_dir):
+        """Download a magnet link using libtorrent or webtorrent fallback."""
+        import subprocess as _sp, shutil
+
+        # Try libtorrent Python library first
+        try:
+            import libtorrent as lt
+            import time
+
+            ses = lt.session({'listen_interfaces': '0.0.0.0:6881'})
+            params = lt.parse_magnet_uri(magnet_url)
+            params.save_path = out_dir
+            handle = ses.add_torrent(params)
+
+            self.q.put(("dl_log", "Fetching torrent metadata..."))
+            timeout = 60
+            start = time.time()
+            while not handle.has_metadata():
+                if not getattr(self, 'download_running', True):
+                    ses.remove_torrent(handle)
+                    return
+                if time.time() - start > timeout:
+                    raise Exception("Timeout waiting for metadata — no seeders?")
+                time.sleep(1)
+
+            info = handle.get_torrent_info()
+            name = info.name()
+            total = info.total_size()
+            size_str = (f"{round(total/1024/1024/1024,2)} GB" if total > 1e9
+                        else f"{round(total/1024/1024,1)} MB")
+            self.q.put(("dl_log", f"Torrent: {name}"))
+            self.q.put(("dl_log", f"Size: {size_str}"))
+
+            while not handle.is_seed():
+                if not getattr(self, 'download_running', True):
+                    ses.remove_torrent(handle)
+                    return
+                s = handle.status()
+                pct = int(s.progress * 100)
+                speed = round(s.download_rate / 1024, 1)
+                peers = s.num_peers
+                self.q.put(("dl_progress", pct,
+                    f"{name[:35]} | {speed} KB/s | {peers} peers"))
+                time.sleep(2)
+
+            self.dl_output_path = os.path.join(out_dir, name)
+            self.q.put(("dl_finished", True))
+            return
+
+        except ImportError:
+            self.q.put(("dl_log", "libtorrent not installed — trying webtorrent..."))
+        except Exception as e:
+            self.q.put(("dl_log", f"libtorrent error: {e}"))
+
+        # Try webtorrent CLI
+        webtorrent = shutil.which('webtorrent')
+        if webtorrent:
+            try:
+                self.q.put(("dl_log", "Using webtorrent CLI..."))
+                proc = _sp.Popen(
+                    [webtorrent, 'download', magnet_url, '--out', out_dir, '--no-gui'],
+                    stdout=_sp.PIPE, stderr=_sp.STDOUT,
+                    text=True, bufsize=1)
+                for line in proc.stdout:
+                    line = line.strip()
+                    if line:
+                        self.q.put(("dl_log", line))
+                    if not getattr(self, 'download_running', True):
+                        proc.terminate()
+                        return
+                proc.wait()
+                if proc.returncode == 0:
+                    self.q.put(("dl_finished", True))
+                else:
+                    self.q.put(("dl_error", "webtorrent failed"))
+                return
+            except Exception as e:
+                self.q.put(("dl_log", f"webtorrent error: {e}"))
+
+        # No torrent client — show helpful message
+        self.q.put(("dl_error",
+            "Magnet links need a torrent client.\n\n"
+            "To enable: pip3 install libtorrent\n\n"
+            "Or open in Transmission (free torrent app)."))
 
 
 def main():
