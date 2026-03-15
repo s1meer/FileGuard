@@ -1099,20 +1099,31 @@ class FileGuardApp:
                         except Exception:
                             pass
 
-                elif kind == "conv_done":
-                    _, out, size_kb = msg
-                    self._conv_output = out
-                    if hasattr(self, 'conv_btn'):
-                        self.conv_btn.config(text="Convert Now", state="normal")
-                        self.conv_progress.stop()
-                        self.conv_result.config(text=f"\u2713 Saved: {os.path.basename(out)} ({size_kb} KB)", fg=GREEN)
-                        self.conv_open_btn.pack(padx=20, pady=(0,4), anchor="w")
+                elif kind == "conv_log":
+                    if hasattr(self, 'conv_log'):
+                        self.conv_log.config(state="normal")
+                        self.conv_log.insert("end", msg[1] + "\n")
+                        self.conv_log.tag_add("g", "1.0", "end")
+                        self.conv_log.tag_config("g", foreground="#58d68d")
+                        self.conv_log.see("end")
+                        self.conv_log.config(state="disabled")
 
-                elif kind == "conv_error":
+                elif kind == "conv_done":
+                    result = msg[1]
                     if hasattr(self, 'conv_btn'):
-                        self.conv_btn.config(text="Convert Now", state="normal")
+                        self.conv_btn.config(state="normal", text="Convert Now")
                         self.conv_progress.stop()
-                        self.conv_result.config(text=f"\u2717 {msg[1]}", fg=RED)
+                        if result.get("ok"):
+                            self.conv_output_path = result.get("output")
+                            self.conv_result_label.config(
+                                text=f"\u2713 {result.get('message', 'Done')}", fg="#2d7a2d")
+                            if self.conv_output_path:
+                                self.conv_open_btn.pack(side="left", padx=8)
+                            self.conv_status_lbl.config(
+                                text=f"Saved: {self.conv_output_path or ''}")
+                        else:
+                            self.conv_result_label.config(
+                                text=f"\u2717 {result.get('message', 'Failed')}", fg="#cc2200")
 
                 elif kind == "ocr_done":
                     if hasattr(self, 'ocr_btn'):
@@ -1537,84 +1548,164 @@ class FileGuardApp:
 
     def _build_convert_tab(self):
         f = self.tab_convert
-        tk.Label(f, text="Convert files between formats:", font=FONT_B,
-                 bg=BG, fg=TEXT).pack(anchor="w", padx=20, pady=(14,4))
-        row1 = tk.Frame(f, bg=BG)
-        row1.pack(fill="x", padx=20, pady=(0,6))
-        self.conv_src = tk.StringVar()
-        tk.Entry(row1, textvariable=self.conv_src, font=FONT, width=52,
-                 relief="solid", bd=1).pack(side="left", fill="x", expand=True, ipady=5)
-        tk.Button(row1, text="Browse", font=FONT, command=self._browse_conv_file,
-                  relief="solid", bd=1, padx=10, cursor="hand2").pack(side="left", padx=(8,0))
-        row2 = tk.Frame(f, bg=BG)
-        row2.pack(fill="x", padx=20, pady=(0,6))
-        tk.Label(row2, text="Convert from:", font=FONT_B, bg=BG, fg=TEXT).pack(side="left")
-        self.conv_from = tk.StringVar(value="PNG")
-        self.conv_from_cb = ttk.Combobox(row2, textvariable=self.conv_from, font=FONT, width=10, state="readonly")
-        self.conv_from_cb.pack(side="left", padx=(8,20))
-        tk.Label(row2, text="Convert to:", font=FONT_B, bg=BG, fg=TEXT).pack(side="left")
-        self.conv_to = tk.StringVar(value="JPG")
-        self.conv_to_cb = ttk.Combobox(row2, textvariable=self.conv_to, font=FONT, width=10, state="readonly")
-        self.conv_to_cb.pack(side="left", padx=(8,0))
-        self.conv_from.trace_add("write", self._update_conv_to_options)
-        row3 = tk.Frame(f, bg=BG)
-        row3.pack(fill="x", padx=20, pady=(0,6))
-        tk.Label(row3, text="Quality (images):", font=FONT_B, bg=BG, fg=TEXT).pack(side="left")
-        self.conv_quality = tk.IntVar(value=85)
-        ttk.Scale(row3, from_=50, to=100, variable=self.conv_quality,
-                  orient="horizontal", length=180).pack(side="left", padx=8)
-        self.conv_quality_lbl = tk.Label(row3, text="85", font=FONT_SM, bg=BG, fg=MUTED)
-        self.conv_quality_lbl.pack(side="left")
-        self.conv_quality.trace_add("write", lambda *a: self.conv_quality_lbl.config(
-            text=str(self.conv_quality.get())))
-        row4 = tk.Frame(f, bg=BG)
-        row4.pack(fill="x", padx=20, pady=(0,6))
-        tk.Label(row4, text="Save to:", font=FONT_B, bg=BG, fg=TEXT).pack(side="left")
-        self.conv_out_dir = tk.StringVar(value=str(Path.home() / "Downloads"))
-        tk.Entry(row4, textvariable=self.conv_out_dir, font=FONT, width=38,
-                 relief="solid", bd=1).pack(side="left", padx=(8,4), ipady=4, fill="x", expand=True)
-        tk.Button(row4, text="Browse", font=FONT_SM, command=self._browse_conv_out,
-                  relief="solid", bd=1, padx=6, cursor="hand2").pack(side="left")
-        self.conv_btn = tk.Button(f, text="Convert Now", font=FONT_B, bg=BLUE, fg="white",
-                                   command=self._start_convert, relief="flat", padx=18, cursor="hand2")
-        self.conv_btn.pack(padx=20, pady=(4,4), anchor="w")
-        self.conv_progress = ttk.Progressbar(f, mode="indeterminate", length=400)
-        self.conv_progress.pack(fill="x", padx=20, pady=(0,4))
-        self.conv_result = tk.Label(f, text="", font=FONT_B, bg=BG, fg=GREEN, anchor="w")
-        self.conv_result.pack(fill="x", padx=20, pady=(0,4))
-        self.conv_open_btn = tk.Button(f, text="Open File", font=FONT, command=self._open_conv_result,
-                                        relief="solid", bd=1, padx=10, cursor="hand2")
-        all_fmts = ["PNG","JPG","WEBP","BMP","TIFF","GIF","MP3","WAV","FLAC","OGG","M4A","AAC","MP4","AVI","MKV","MOV","WEBM"]
-        self.conv_from_cb["values"] = all_fmts
-        self._update_conv_to_options()
 
-    def _update_conv_to_options(self, *args):
-        fmt = self.conv_from.get().upper()
-        image_fmts = {"PNG","JPG","WEBP","BMP","TIFF","GIF"}
-        audio_fmts = {"MP3","WAV","FLAC","OGG","M4A","AAC"}
-        video_fmts = {"MP4","AVI","MKV","MOV","WEBM","FLV"}
-        if fmt in image_fmts:
-            opts = sorted(image_fmts - {fmt})
-        elif fmt in audio_fmts:
-            opts = sorted((audio_fmts - {fmt}) | {"MP3"})
-        elif fmt in video_fmts:
-            opts = sorted((video_fmts - {fmt}) | {"MP3"})
+        try:
+            from converter import CATEGORIES, detect_category, get_output_formats
+        except ImportError:
+            tk.Label(f, text="converter.py not found", font=FONT_B,
+                     bg=BG, fg="#cc2200").pack(pady=20)
+            return
+
+        # File input row
+        tk.Label(f, text="File to Convert:", font=FONT_B,
+                 bg=BG, fg="black").pack(anchor="w", padx=20, pady=(16,4))
+
+        row1 = tk.Frame(f, bg=BG)
+        row1.pack(fill="x", padx=20, pady=(0,4))
+
+        self.conv_path = tk.StringVar()
+        self.conv_path.trace("w", self._on_conv_file_change)
+
+        conv_entry = tk.Entry(row1, textvariable=self.conv_path,
+                              font=FONT, relief="solid", bd=1,
+                              bg="white", fg="black")
+        conv_entry.pack(side="left", fill="x", expand=True, ipady=5)
+        tk.Button(row1, text="Browse", font=FONT,
+                  command=self._browse_conv_file,
+                  relief="solid", bd=1, padx=12,
+                  bg="#e8e8e8", fg="black", cursor="hand2"
+                  ).pack(side="left", padx=(8,0))
+
+        self.conv_category_label = tk.Label(f, text="Select a file to begin",
+            font=FONT_SM, bg=BG, fg="#888888")
+        self.conv_category_label.pack(anchor="w", padx=20, pady=(0,8))
+
+        # Format row
+        fmt_row = tk.Frame(f, bg=BG)
+        fmt_row.pack(fill="x", padx=20, pady=(0,8))
+        tk.Label(fmt_row, text="Convert to:", font=FONT_B,
+                 bg=BG, fg="black").pack(side="left")
+
+        self.conv_format = tk.StringVar()
+        self.conv_format_menu = ttk.Combobox(fmt_row, textvariable=self.conv_format,
+                                              font=FONT, width=30, state="readonly")
+        self.conv_format_menu.pack(side="left", padx=(8,0))
+        self.conv_format_desc_lbl = tk.Label(fmt_row, text="",
+            font=FONT_SM, bg=BG, fg="#666666")
+        self.conv_format_desc_lbl.pack(side="left", padx=(12,0))
+        self.conv_format.trace("w", self._on_conv_format_change)
+
+        # Quality slider
+        self.conv_quality_var = tk.IntVar(value=92)
+        self.conv_quality_frame = tk.Frame(f, bg=BG)
+        tk.Label(self.conv_quality_frame, text="Quality:", font=FONT_SM,
+                 bg=BG, fg="black").pack(side="left")
+        tk.Scale(self.conv_quality_frame, from_=10, to=100,
+                 variable=self.conv_quality_var, orient="horizontal",
+                 length=180, bg=BG, fg="black",
+                 highlightthickness=0).pack(side="left", padx=4)
+        self.conv_qlabel = tk.Label(self.conv_quality_frame, text="92",
+            font=FONT_SM, bg=BG, fg="black", width=3)
+        self.conv_qlabel.pack(side="left")
+        self.conv_quality_var.trace("w",
+            lambda *a: self.conv_qlabel.config(text=str(self.conv_quality_var.get())))
+
+        # Output dir
+        out_row = tk.Frame(f, bg=BG)
+        out_row.pack(fill="x", padx=20, pady=(0,8))
+        tk.Label(out_row, text="Save to:", font=FONT_B,
+                 bg=BG, fg="black").pack(side="left")
+        self.conv_out_dir = tk.StringVar(value=str(Path.home() / "Downloads"))
+        tk.Entry(out_row, textvariable=self.conv_out_dir,
+                 font=FONT, relief="solid", bd=1,
+                 bg="white", fg="black", width=38).pack(side="left", padx=(8,4), ipady=4)
+        tk.Button(out_row, text="Browse", font=FONT_SM,
+                  command=self._browse_conv_out,
+                  relief="solid", bd=1, padx=6,
+                  bg="#e8e8e8", fg="black", cursor="hand2"
+                  ).pack(side="left")
+
+        # Convert button
+        self.conv_btn = tk.Button(f, text="Convert Now",
+            font=FONT_B, bg=BLUE, fg="white",
+            command=self._start_convert,
+            relief="flat", padx=24, pady=8, cursor="hand2")
+        self.conv_btn.pack(pady=(4,4))
+
+        # Progress
+        self.conv_progress = ttk.Progressbar(f, mode="indeterminate", length=500)
+        self.conv_progress.pack(fill="x", padx=20, pady=(0,4))
+
+        self.conv_status_lbl = tk.Label(f, text="", font=FONT_SM, bg=BG, fg="#444444")
+        self.conv_status_lbl.pack(anchor="w", padx=20)
+
+        # Log
+        self.conv_log = scrolledtext.ScrolledText(f, font=("Courier", 12), height=7,
+            bg="#0d1117", fg="#58d68d", insertbackground="#58d68d",
+            relief="solid", bd=1, state="disabled", padx=10, pady=8, wrap="word")
+        self.conv_log.pack(fill="both", expand=True, padx=20, pady=(4,4))
+
+        # Result row
+        self.conv_result_row = tk.Frame(f, bg=BG)
+        self.conv_result_row.pack(fill="x", padx=20, pady=(0,12))
+        self.conv_result_label = tk.Label(self.conv_result_row, text="",
+            font=FONT_B, bg=BG, fg="#2d7a2d", wraplength=600, justify="left")
+        self.conv_result_label.pack(side="left")
+        self.conv_open_btn = tk.Button(self.conv_result_row, text="Open in Finder",
+            font=FONT, command=self._open_conv_result,
+            relief="solid", bd=1, padx=10, bg="#e8e8e8", fg="black", cursor="hand2")
+        self.conv_output_path = None
+
+    def _on_conv_file_change(self, *args):
+        try:
+            from converter import detect_category, get_output_formats, CATEGORIES
+        except ImportError:
+            return
+        path = self.conv_path.get().strip()
+        if not path or not os.path.exists(path):
+            return
+        cat = detect_category(path)
+        if cat:
+            self.conv_category_label.config(
+                text=f"Detected: {cat} file", fg="#1a5fa8")
+            fmts = get_output_formats(cat)
+            self.conv_format_menu["values"] = fmts
+            if fmts:
+                self.conv_format.set(fmts[0])
+            if cat in ("Image", "Video", "Audio"):
+                self.conv_quality_frame.pack(anchor="w", padx=20, pady=(0,4))
+            else:
+                self.conv_quality_frame.pack_forget()
         else:
-            opts = ["JPG","PNG","MP3","MP4"]
-        self.conv_to_cb["values"] = opts
-        if opts:
-            self.conv_to.set(opts[0])
+            self.conv_category_label.config(text="Unknown file type", fg="#cc2200")
+            self.conv_format_menu["values"] = []
+
+    def _on_conv_format_change(self, *args):
+        try:
+            from converter import CATEGORIES, detect_category
+        except ImportError:
+            return
+        path = self.conv_path.get().strip()
+        fmt = self.conv_format.get()
+        if not path:
+            return
+        cat = detect_category(path)
+        if cat and fmt:
+            desc = CATEGORIES.get(cat, {}).get("outputs", {}).get(fmt, {}).get("desc", "")
+            self.conv_format_desc_lbl.config(text=desc)
 
     def _browse_conv_file(self):
-        p = filedialog.askopenfilename(title="Select file to convert")
-        if p:
-            self.conv_src.set(p)
-            ext = Path(p).suffix.lstrip('.').upper()
-            if ext == "JPEG": ext = "JPG"
-            if ext in self.conv_from_cb["values"]:
-                self.conv_from.set(ext)
-            self._update_conv_to_options()
-            self.conv_out_dir.set(str(Path(p).parent))
+        path = filedialog.askopenfilename(
+            title="Select file to convert",
+            filetypes=[
+                ("All supported", "*.jpg *.jpeg *.png *.gif *.bmp *.webp *.tiff "
+                 "*.mp4 *.avi *.mkv *.mov *.mp3 *.wav *.flac *.ogg "
+                 "*.docx *.doc *.pdf *.txt *.md *.xlsx *.csv *.json *.yaml "
+                 "*.ipynb *.xml *.py *.js *.pptx *.epub"),
+                ("All files", "*.*"),
+            ])
+        if path:
+            self.conv_path.set(path)
 
     def _browse_conv_out(self):
         d = filedialog.askdirectory(title="Save converted file to")
@@ -1622,36 +1713,46 @@ class FileGuardApp:
             self.conv_out_dir.set(d)
 
     def _start_convert(self):
-        src = self.conv_src.get().strip()
-        if not os.path.exists(src):
-            messagebox.showerror("Not found", f"File not found:\n{src}")
+        try:
+            from converter import convert, detect_category
+        except ImportError as e:
+            messagebox.showerror("Missing", f"converter.py not found: {e}")
             return
-        fmt_from = self.conv_from.get().upper()
-        fmt_to   = self.conv_to.get().upper()
-        quality  = self.conv_quality.get()
-        out_dir  = self.conv_out_dir.get()
-        self.conv_btn.config(text="Converting...", state="disabled")
-        self.conv_progress.start()
-        self.conv_result.config(text="")
+
+        src = self.conv_path.get().strip()
+        fmt = self.conv_format.get().strip()
+        out_dir = self.conv_out_dir.get().strip() or str(Path.home() / "Downloads")
+
+        if not src or not os.path.exists(src):
+            messagebox.showerror("No file", "Select a file to convert first")
+            return
+        if not fmt:
+            messagebox.showerror("No format", "Select output format")
+            return
+
+        self.conv_btn.config(state="disabled", text="Converting...")
+        self.conv_progress.start(10)
+        self.conv_log.config(state="normal")
+        self.conv_log.delete("1.0", "end")
+        self.conv_log.config(state="disabled")
+        self.conv_result_label.config(text="")
         self.conv_open_btn.pack_forget()
-        image_fmts = {"PNG","JPG","WEBP","BMP","TIFF","GIF"}
+        self.conv_output_path = None
+
+        options = {"quality": self.conv_quality_var.get()}
+
+        def log_fn(msg):
+            self.q.put(("conv_log", msg))
 
         def run():
-            try:
-                if fmt_from in image_fmts and fmt_to in image_fmts:
-                    out = convert_image(src, fmt_to, quality=quality, out_dir=out_dir)
-                else:
-                    out = convert_media(src, fmt_to.lower(), out_dir=out_dir)
-                size_kb = round(os.path.getsize(out) / 1024, 1)
-                self.q.put(("conv_done", out, size_kb))
-            except Exception as e:
-                self.q.put(("conv_error", str(e)))
+            result = convert(src, fmt, out_dir, options, log_fn)
+            self.q.put(("conv_done", result))
 
         threading.Thread(target=run, daemon=True).start()
 
     def _open_conv_result(self):
-        if self._conv_output:
-            self._open_path(self._conv_output)
+        if self.conv_output_path:
+            self._reveal_in_finder(self.conv_output_path)
 
     # ── PRIVACY TAB ────────────────────────────────────────────────────────
 
@@ -2455,38 +2556,36 @@ class FileGuardApp:
             messagebox.showerror("Error", f"Could not open file:\n{e}")
 
     def _download_magnet(self, magnet_url, out_dir):
-        """Download a magnet link using libtorrent or webtorrent fallback."""
-        import subprocess as _sp, shutil
+        import subprocess, shutil
 
-        # Try libtorrent Python library first
+        self.q.put(("dl_log", "Magnet link detected"))
+        self.q.put(("dl_log", "Checking available torrent clients..."))
+
+        # Try libtorrent
         try:
             import libtorrent as lt
             import time
-
+            self.q.put(("dl_log", "Using libtorrent"))
             ses = lt.session({'listen_interfaces': '0.0.0.0:6881'})
             params = lt.parse_magnet_uri(magnet_url)
             params.save_path = out_dir
             handle = ses.add_torrent(params)
-
-            self.q.put(("dl_log", "Fetching torrent metadata..."))
-            timeout = 60
+            self.q.put(("dl_log", "Fetching torrent metadata (may take 60s)..."))
+            timeout = 120
             start = time.time()
             while not handle.has_metadata():
                 if not getattr(self, 'download_running', True):
                     ses.remove_torrent(handle)
                     return
                 if time.time() - start > timeout:
-                    raise Exception("Timeout waiting for metadata — no seeders?")
+                    raise Exception("Timeout — no seeders found")
                 time.sleep(1)
-
             info = handle.get_torrent_info()
             name = info.name()
             total = info.total_size()
-            size_str = (f"{round(total/1024/1024/1024,2)} GB" if total > 1e9
-                        else f"{round(total/1024/1024,1)} MB")
+            size_str = f"{round(total/1024/1024/1024,2)} GB" if total > 1e9 else f"{round(total/1024/1024,1)} MB"
             self.q.put(("dl_log", f"Torrent: {name}"))
             self.q.put(("dl_log", f"Size: {size_str}"))
-
             while not handle.is_seed():
                 if not getattr(self, 'download_running', True):
                     ses.remove_torrent(handle)
@@ -2495,49 +2594,84 @@ class FileGuardApp:
                 pct = int(s.progress * 100)
                 speed = round(s.download_rate / 1024, 1)
                 peers = s.num_peers
-                self.q.put(("dl_progress", pct,
-                    f"{name[:35]} | {speed} KB/s | {peers} peers"))
+                self.q.put(("dl_progress", pct, f"{name[:35]} | {speed} KB/s | {peers} peers"))
                 time.sleep(2)
-
             self.dl_output_path = os.path.join(out_dir, name)
             self.q.put(("dl_finished", True))
             return
-
         except ImportError:
-            self.q.put(("dl_log", "libtorrent not installed — trying webtorrent..."))
+            self.q.put(("dl_log", "libtorrent not available"))
         except Exception as e:
-            self.q.put(("dl_log", f"libtorrent error: {e}"))
+            self.q.put(("dl_log", f"libtorrent: {e}"))
 
-        # Try webtorrent CLI
+        # Try aria2c (bundled)
+        try:
+            from binaries import get_aria2c
+            aria2c = get_aria2c()
+        except Exception:
+            aria2c = shutil.which('aria2c')
+
+        if aria2c:
+            self.q.put(("dl_log", f"Using aria2c: {aria2c}"))
+            self.q.put(("dl_log", "Connecting to DHT network..."))
+            cmd = [
+                aria2c,
+                '--dir', out_dir,
+                '--seed-time=0',
+                '--max-connection-per-server=4',
+                '--enable-dht=true',
+                '--bt-enable-lpd=true',
+                '--follow-torrent=mem',
+                '--summary-interval=5',
+                magnet_url
+            ]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, bufsize=1)
+            import re as _re
+            for line in iter(proc.stdout.readline, ''):
+                line = line.strip()
+                if not line:
+                    continue
+                if not getattr(self, 'download_running', True):
+                    proc.terminate()
+                    return
+                self.q.put(("dl_log", line))
+                m = _re.search(r'\((\d+)%\)', line)
+                if m:
+                    self.q.put(("dl_progress", int(m.group(1)), line))
+            proc.wait()
+            if proc.returncode == 0:
+                self.q.put(("dl_finished", True))
+                self.dl_output_path = out_dir
+            else:
+                self.q.put(("dl_error", "aria2c failed — torrent may have no seeders"))
+            return
+
+        # Try webtorrent
         webtorrent = shutil.which('webtorrent')
         if webtorrent:
-            try:
-                self.q.put(("dl_log", "Using webtorrent CLI..."))
-                proc = _sp.Popen(
-                    [webtorrent, 'download', magnet_url, '--out', out_dir, '--no-gui'],
-                    stdout=_sp.PIPE, stderr=_sp.STDOUT,
-                    text=True, bufsize=1)
-                for line in proc.stdout:
-                    line = line.strip()
-                    if line:
-                        self.q.put(("dl_log", line))
-                    if not getattr(self, 'download_running', True):
-                        proc.terminate()
-                        return
-                proc.wait()
-                if proc.returncode == 0:
-                    self.q.put(("dl_finished", True))
-                else:
-                    self.q.put(("dl_error", "webtorrent failed"))
-                return
-            except Exception as e:
-                self.q.put(("dl_log", f"webtorrent error: {e}"))
+            self.q.put(("dl_log", f"Using webtorrent: {webtorrent}"))
+            proc = subprocess.Popen(
+                [webtorrent, 'download', magnet_url, '--out', out_dir],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            for line in iter(proc.stdout.readline, ''):
+                line = line.strip()
+                if line:
+                    self.q.put(("dl_log", line))
+                if not getattr(self, 'download_running', True):
+                    proc.terminate()
+                    return
+            proc.wait()
+            if proc.returncode == 0:
+                self.q.put(("dl_finished", True))
+            else:
+                self.q.put(("dl_error", "webtorrent failed"))
+            return
 
-        # No torrent client — show helpful message
         self.q.put(("dl_error",
-            "Magnet links need a torrent client.\n\n"
-            "To enable: pip3 install libtorrent\n\n"
-            "Or open in Transmission (free torrent app)."))
+            "No torrent client found.\n\n"
+            "Install aria2: brew install aria2\n"
+            "Or use a torrent app like Transmission."))
 
 
 def main():

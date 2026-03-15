@@ -60,10 +60,20 @@ def get_tessdata():
     return None
 
 
+def get_aria2c():
+    app_dir = get_app_dir()
+    bundled = app_dir / 'bin' / 'aria2c'
+    if bundled.exists() and os.access(str(bundled), os.X_OK):
+        return str(bundled)
+    import shutil
+    return shutil.which('aria2c')
+
+
 def check_all():
     return {
         'ffmpeg':    get_ffmpeg() is not None,
         'yt-dlp':   get_yt_dlp() is not None,
         'tesseract': get_tesseract() is not None,
         'tessdata':  get_tessdata() is not None,
+        'aria2c':    get_aria2c() is not None,
     }
