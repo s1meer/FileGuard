@@ -46,6 +46,7 @@ from fileguard_features import (
     diff_text_files, diff_binary_files,
     convert_image, convert_media, get_media_info,
 )
+from binaries import get_ffmpeg, get_yt_dlp, get_tesseract, get_tessdata
 
 # ── Colors and fonts ──────────────────────────────────────
 BG       = "#ffffff"
@@ -632,24 +633,34 @@ class FileGuardApp:
 
             try:
                 import yt_dlp
+                ffmpeg_path = get_ffmpeg()
+
+                fmt_map = {
+                    "Best quality (video+audio)": "bestvideo+bestaudio/best" if ffmpeg_path else "best",
+                    "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best[height<=720]",
+                    "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best[height<=480]",
+                    "360p (small file)": "best[height<=360]/worst",
+                    "Audio only (MP3)":  "bestaudio/best",
+                }
+
                 opts = {
-                    "outtmpl": os.path.join(out_dir, "%(title)s.%(ext)s"),
-                    "progress_hooks": [progress_hook],
-                    "quiet": True,
-                    "no_warnings": True,
+                    "outtmpl":            os.path.join(out_dir, "%(title)s.%(ext)s"),
+                    "progress_hooks":     [progress_hook],
+                    "quiet":              True,
+                    "no_warnings":        True,
                     "nocheckcertificate": True,
+                    "format":             fmt_map.get(quality, "best"),
                 }
-                q_map = {
-                    "Audio only (MP3)":           ("bestaudio/best", True),
-                    "720p":                       ("bestvideo[height<=720]+bestaudio/best[height<=720]", False),
-                    "480p":                       ("bestvideo[height<=480]+bestaudio/best[height<=480]", False),
-                    "360p (small file)":          ("bestvideo[height<=360]+bestaudio/best[height<=360]", False),
-                    "Best quality (video+audio)": ("bestvideo+bestaudio/best", False),
-                }
-                fmt, is_audio = q_map.get(quality, ("bestvideo+bestaudio/best", False))
-                opts["format"] = fmt
-                if is_audio:
-                    opts["postprocessors"] = [{"key":"FFmpegExtractAudio","preferredcodec":"mp3"}]
+
+                if ffmpeg_path:
+                    opts["ffmpeg_location"] = os.path.dirname(ffmpeg_path)
+                    self.q.put(("dl_log", f"ffmpeg: bundled ({os.path.basename(ffmpeg_path)})"))
+                else:
+                    self.q.put(("dl_log", "ffmpeg: not found, using compatible format"))
+
+                if quality == "Audio only (MP3)" and ffmpeg_path:
+                    opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}]
+
                 self.q.put(("dl_log", f"Downloading from: {url}"))
                 self.q.put(("dl_log", f"Quality: {quality}"))
                 self.q.put(("dl_log", f"Saving to: {out_dir}"))
@@ -1520,7 +1531,7 @@ class FileGuardApp:
         if not check_tesseract():
             warn = tk.Frame(f, bg="#fff0f0", relief="solid", bd=1)
             warn.pack(fill="x", padx=20, pady=(14,0))
-            tk.Label(warn, text="Tesseract not found. Install: brew install tesseract tesseract-lang",
+            tk.Label(warn, text="Tesseract not found in app bundle — please report at github.com/s1meer/FileGuard/issues",
                      font=FONT_SM, bg="#fff0f0", fg=RED, padx=14, pady=8).pack(side="left")
 
         tk.Label(f, text="Extract text from any image or screenshot:",
@@ -1587,6 +1598,13 @@ class FileGuardApp:
 
         def run():
             try:
+                import pytesseract
+                tess_path = get_tesseract()
+                tessdata = get_tessdata()
+                if tess_path:
+                    pytesseract.pytesseract.tesseract_cmd = tess_path
+                if tessdata:
+                    os.environ['TESSDATA_PREFIX'] = tessdata
                 text = ocr_image(path, language=lang)
                 self.q.put(("ocr_done", text))
             except Exception as e:

@@ -138,10 +138,13 @@ def strip_exif_folder(folder, out_dir, on_progress=None):
 def ocr_image(image_path, language='eng'):
     """Extract text from image using Tesseract."""
     import pytesseract
-    for _tpath in ['/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract', '/usr/bin/tesseract']:
-        if os.path.exists(_tpath):
-            pytesseract.pytesseract.tesseract_cmd = _tpath
-            break
+    from binaries import get_tesseract, get_tessdata
+    tess_path = get_tesseract()
+    tessdata = get_tessdata()
+    if tess_path:
+        pytesseract.pytesseract.tesseract_cmd = tess_path
+    if tessdata:
+        os.environ['TESSDATA_PREFIX'] = tessdata
     from PIL import Image
     img = Image.open(image_path)
     text = pytesseract.image_to_string(img, lang=language)
@@ -150,6 +153,16 @@ def ocr_image(image_path, language='eng'):
 
 def check_tesseract():
     """Return True if tesseract is installed."""
+    from binaries import get_tesseract
+    bundled = get_tesseract()
+    if bundled:
+        try:
+            r = subprocess.run([bundled, '--version'],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                return True
+        except Exception:
+            pass
     for _tpath in ['/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract', '/usr/bin/tesseract', 'tesseract']:
         try:
             r = subprocess.run([_tpath, '--version'],
@@ -158,12 +171,7 @@ def check_tesseract():
                 return True
         except Exception:
             pass
-    try:
-        r = subprocess.run(['tesseract', '--version'],
-                           capture_output=True, text=True)
-        return r.returncode == 0
-    except Exception:
-        return False
+    return False
 
 
 # ── Duplicate finder ──────────────────────────────────────────────────────
@@ -448,13 +456,15 @@ def convert_image(src, dst_format, quality=85, out_dir=None):
 
 def convert_media(src, dst_format, out_dir=None):
     """Convert audio or video using ffmpeg."""
+    from binaries import get_ffmpeg
+    ffmpeg = get_ffmpeg() or 'ffmpeg'
     ext = dst_format.lower()
     if out_dir:
         out = os.path.join(out_dir, Path(src).stem + '.' + ext)
     else:
         out = str(Path(src).parent / (Path(src).stem + '.' + ext))
     result = subprocess.run(
-        ['ffmpeg', '-i', src, '-y', out],
+        [ffmpeg, '-i', src, '-y', out],
         capture_output=True, text=True
     )
     if result.returncode != 0:
@@ -465,8 +475,13 @@ def convert_media(src, dst_format, out_dir=None):
 def get_media_info(path):
     """Get media metadata via ffprobe."""
     try:
+        from binaries import get_ffmpeg
+        ffmpeg = get_ffmpeg() or 'ffmpeg'
+        ffprobe = os.path.join(os.path.dirname(ffmpeg), 'ffprobe') if os.path.dirname(ffmpeg) else 'ffprobe'
+        if not os.path.exists(ffprobe):
+            ffprobe = 'ffprobe'
         result = subprocess.run(
-            ['ffprobe', '-v', 'quiet', '-print_format', 'json',
+            [ffprobe, '-v', 'quiet', '-print_format', 'json',
              '-show_format', '-show_streams', path],
             capture_output=True, text=True
         )
