@@ -138,6 +138,10 @@ def strip_exif_folder(folder, out_dir, on_progress=None):
 def ocr_image(image_path, language='eng'):
     """Extract text from image using Tesseract."""
     import pytesseract
+    for _tpath in ['/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract', '/usr/bin/tesseract']:
+        if os.path.exists(_tpath):
+            pytesseract.pytesseract.tesseract_cmd = _tpath
+            break
     from PIL import Image
     img = Image.open(image_path)
     text = pytesseract.image_to_string(img, lang=language)
@@ -146,6 +150,14 @@ def ocr_image(image_path, language='eng'):
 
 def check_tesseract():
     """Return True if tesseract is installed."""
+    for _tpath in ['/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract', '/usr/bin/tesseract', 'tesseract']:
+        try:
+            r = subprocess.run([_tpath, '--version'],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                return True
+        except Exception:
+            pass
     try:
         r = subprocess.run(['tesseract', '--version'],
                            capture_output=True, text=True)

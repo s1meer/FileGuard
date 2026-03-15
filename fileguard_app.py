@@ -7,6 +7,7 @@ Features: drag-drop repair, auto-diagnose, unknown format reporting, auto-update
 
 import os
 import sys
+import ssl
 import platform
 import subprocess
 import threading
@@ -15,6 +16,13 @@ import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from pathlib import Path
+
+# Fix SSL verification on Mac (certificate issue)
+os.environ['PYTHONHTTPSVERIFY'] = '0'
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
 
 # Try tkinterdnd2 for drag and drop — fallback gracefully if not installed
 try:
@@ -83,10 +91,10 @@ class FileGuardApp:
     def __init__(self, root):
         self.root = root
         self.root.title("FileGuard")
-        self.root.geometry("900x700")
+        self.root.geometry("1150x740")
         self.root.configure(bg=BG)
         self.root.resizable(True, True)
-        self.root.minsize(750, 580)
+        self.root.minsize(950, 620)
 
         self.q = queue.Queue()
         self.scan_running = False
@@ -151,17 +159,17 @@ class FileGuardApp:
         self.tab_rename    = tk.Frame(nb, bg=BG)
         self.tab_tools     = tk.Frame(nb, bg=BG)
 
-        nb.add(self.tab_scan,       text="  Scan  ")
-        nb.add(self.tab_repair,     text="  Repair  ")
-        nb.add(self.tab_download,   text="  Download  ")
-        nb.add(self.tab_info,       text="  File Info  ")
-        nb.add(self.tab_preview,    text="  Preview  ")
-        nb.add(self.tab_convert,    text="  Convert  ")
-        nb.add(self.tab_privacy,    text="  Privacy  ")
-        nb.add(self.tab_ocr,        text="  OCR  ")
-        nb.add(self.tab_duplicates, text="  Duplicates  ")
-        nb.add(self.tab_rename,     text="  Rename  ")
-        nb.add(self.tab_tools,      text="  Tools  ")
+        nb.add(self.tab_scan,       text="Scan")
+        nb.add(self.tab_repair,     text="Repair")
+        nb.add(self.tab_download,   text="Download")
+        nb.add(self.tab_info,       text="Info")
+        nb.add(self.tab_preview,    text="Preview")
+        nb.add(self.tab_convert,    text="Convert")
+        nb.add(self.tab_privacy,    text="Privacy")
+        nb.add(self.tab_ocr,        text="OCR")
+        nb.add(self.tab_duplicates, text="Dupes")
+        nb.add(self.tab_rename,     text="Rename")
+        nb.add(self.tab_tools,      text="Tools")
 
         self._build_scan_tab()
         self._build_repair_tab()
@@ -580,12 +588,56 @@ class FileGuardApp:
 
         def run():
             try:
+                DIRECT_EXTS = ('.pdf','.zip','.mp4','.mp3','.docx','.xlsx',
+                               '.pptx','.rar','.7z','.tar','.gz','.png',
+                               '.jpg','.jpeg','.gif','.txt','.csv','.epub',
+                               '.avi','.mkv','.mov','.flac','.wav','.webm')
+                clean_url = url.split('?')[0].lower()
+                is_direct = any(clean_url.endswith(ext) for ext in DIRECT_EXTS)
+
+                if is_direct:
+                    try:
+                        import urllib.request
+                        ctx = ssl.create_default_context()
+                        ctx.check_hostname = False
+                        ctx.verify_mode = ssl.CERT_NONE
+                        filename = url.split('/')[-1].split('?')[0] or 'download'
+                        save_path = os.path.join(out_dir, filename)
+                        req = urllib.request.Request(url, headers={
+                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+                        })
+                        self.q.put(("dl_log", f"Direct download: {url}"))
+                        self.q.put(("dl_log", f"Saving to: {save_path}"))
+                        with urllib.request.urlopen(req, context=ctx) as resp:
+                            total = int(resp.headers.get('Content-Length', 0))
+                            downloaded = 0
+                            with open(save_path, 'wb') as f:
+                                while True:
+                                    chunk = resp.read(16384)
+                                    if not chunk:
+                                        break
+                                    f.write(chunk)
+                                    downloaded += len(chunk)
+                                    if total:
+                                        self.q.put(("dl_progress", int(downloaded/total*100), filename))
+                        self.dl_output_path = save_path
+                        self.q.put(("dl_finished", True))
+                        return
+                    except Exception as de:
+                        self.q.put(("dl_error", str(de)))
+                        return
+
+            except Exception:
+                pass
+
+            try:
                 import yt_dlp
                 opts = {
                     "outtmpl": os.path.join(out_dir, "%(title)s.%(ext)s"),
                     "progress_hooks": [progress_hook],
                     "quiet": True,
                     "no_warnings": True,
+                    "nocheckcertificate": True,
                 }
                 q_map = {
                     "Audio only (MP3)":           ("bestaudio/best", True),
@@ -1127,9 +1179,12 @@ class FileGuardApp:
                 pages = len(pdf.pages)
             try:
                 from pdf2image import convert_from_path
-                imgs = convert_from_path(path, first_page=1, last_page=1, dpi=90)
+                imgs = convert_from_path(path, first_page=1, last_page=1, dpi=90,
+                                         poppler_path='/opt/homebrew/bin')
                 if imgs:
                     from PIL import ImageTk
+                    self.preview_canvas.pack(fill="both", expand=True)
+                    self.preview_text.pack_forget()
                     self.preview_canvas.update_idletasks()
                     cw = max(self.preview_canvas.winfo_width(), 400)
                     ch = max(self.preview_canvas.winfo_height(), 300)
@@ -1138,11 +1193,18 @@ class FileGuardApp:
                     self.preview_canvas.delete("all")
                     self.preview_canvas.create_image(cw//2, ch//2, image=photo, anchor="center")
                     self.preview_canvas._photo = photo
-            except ImportError:
-                self._preview_message(
-                    f"PDF Document \u2014 {pages} pages\n\n"
-                    "Install pdf2image for visual preview:\n"
-                    "  pip3 install pdf2image\n\nClick 'Open File' to view in Preview app")
+                    self.preview_info.config(text=f"PDF \u2014 {pages} pages \u2014 {path}")
+                    return
+            except Exception:
+                pass
+            # Fallback: show PDF info text
+            size_kb = round(os.path.getsize(path) / 1024, 1)
+            self._preview_message(
+                f"PDF Document\n{'='*40}\n"
+                f"Pages:  {pages}\n"
+                f"Size:   {size_kb} KB\n"
+                f"Path:   {path}\n\n"
+                "Click 'Open File' to view in Preview app")
             self.preview_info.config(text=f"PDF \u2014 {pages} pages \u2014 {path}")
         except Exception as e:
             self._preview_message(f"PDF preview error:\n{e}")
@@ -1777,17 +1839,19 @@ class FileGuardApp:
         self.hash_file = tk.StringVar()
         r1 = tk.Frame(c, bg=BG2); r1.pack(fill="x", pady=(0,4))
         tk.Entry(r1, textvariable=self.hash_file, font=FONT_SM, width=26,
-                 relief="solid", bd=1).pack(side="left", fill="x", expand=True, ipady=3)
+                 relief="solid", bd=1, bg="white", fg="black", insertbackground="black").pack(side="left", fill="x", expand=True, ipady=3)
         tk.Button(r1, text="Browse", font=FONT_SM, relief="solid", bd=1, padx=6, cursor="hand2",
+                  bg="#e8e8e8", fg="black", activebackground="#d0d0d0", activeforeground="black",
                   command=lambda: self.hash_file.set(filedialog.askopenfilename() or self.hash_file.get())
                   ).pack(side="left", padx=(4,0))
         self.hash_expected = tk.StringVar()
         tk.Entry(c, textvariable=self.hash_expected, font=FONT_SM, width=42,
-                 relief="solid", bd=1).pack(fill="x", pady=(0,2), ipady=3)
+                 relief="solid", bd=1, bg="white", fg="black", insertbackground="black").pack(fill="x", pady=(0,2), ipady=3)
         tk.Label(c, text="Paste expected SHA-256 hash above", font=("Helvetica",10), bg=BG2, fg=MUTED).pack(anchor="w")
-        self.hash_result = tk.Label(c, text="", font=FONT_B, bg=BG2, anchor="w", wraplength=270)
+        self.hash_result = tk.Label(c, text="", font=FONT_B, bg=BG2, fg=TEXT, anchor="w", wraplength=270)
         self.hash_result.pack(fill="x", pady=(4,0))
         tk.Button(c, text="Verify", font=FONT_B, bg=BLUE, fg="white", relief="flat",
+                  activebackground="#1248a0", activeforeground="white",
                   cursor="hand2", command=self._run_hash_verify).pack(pady=(4,0), anchor="w")
 
     def _run_hash_verify(self):
@@ -1807,14 +1871,16 @@ class FileGuardApp:
         self.arch_file = tk.StringVar()
         r1 = tk.Frame(c, bg=BG2); r1.pack(fill="x", pady=(0,4))
         tk.Entry(r1, textvariable=self.arch_file, font=FONT_SM, width=26,
-                 relief="solid", bd=1).pack(side="left", fill="x", expand=True, ipady=3)
+                 relief="solid", bd=1, bg="white", fg="black", insertbackground="black").pack(side="left", fill="x", expand=True, ipady=3)
         tk.Button(r1, text="Browse", font=FONT_SM, relief="solid", bd=1, padx=6, cursor="hand2",
+                  bg="#e8e8e8", fg="black", activebackground="#d0d0d0", activeforeground="black",
                   command=lambda: self.arch_file.set(filedialog.askopenfilename() or self.arch_file.get())
                   ).pack(side="left", padx=(4,0))
         self.arch_result = tk.Label(c, text="", font=FONT_SM, bg=BG2, fg=TEXT,
                                      anchor="w", wraplength=270)
         self.arch_result.pack(fill="x", pady=(4,0))
         tk.Button(c, text="Extract", font=FONT_B, bg=BLUE, fg="white", relief="flat",
+                  activebackground="#1248a0", activeforeground="white",
                   cursor="hand2", command=self._run_unarchive).pack(pady=(4,0), anchor="w")
 
     def _run_unarchive(self):
@@ -1837,8 +1903,9 @@ class FileGuardApp:
         self.qr_file = tk.StringVar()
         r1 = tk.Frame(c, bg=BG2); r1.pack(fill="x", pady=(0,4))
         tk.Entry(r1, textvariable=self.qr_file, font=FONT_SM, width=26,
-                 relief="solid", bd=1).pack(side="left", fill="x", expand=True, ipady=3)
+                 relief="solid", bd=1, bg="white", fg="black", insertbackground="black").pack(side="left", fill="x", expand=True, ipady=3)
         tk.Button(r1, text="Browse", font=FONT_SM, relief="solid", bd=1, padx=6, cursor="hand2",
+                  bg="#e8e8e8", fg="black", activebackground="#d0d0d0", activeforeground="black",
                   command=lambda: self.qr_file.set(
                       filedialog.askopenfilename(filetypes=[("Images","*.jpg *.jpeg *.png *.bmp")]) or self.qr_file.get())
                   ).pack(side="left", padx=(4,0))
@@ -1846,6 +1913,7 @@ class FileGuardApp:
                                    anchor="w", wraplength=270, justify="left")
         self.qr_result.pack(fill="x", pady=(4,0))
         tk.Button(c, text="Read QR", font=FONT_B, bg=BLUE, fg="white", relief="flat",
+                  activebackground="#1248a0", activeforeground="white",
                   cursor="hand2", command=self._run_qr).pack(pady=(4,0), anchor="w")
 
     def _run_qr(self):
@@ -1867,25 +1935,27 @@ class FileGuardApp:
         self.split_mode = tk.StringVar(value="split")
         mr = tk.Frame(c, bg=BG2); mr.pack(fill="x", pady=(0,4))
         tk.Radiobutton(mr, text="Split", variable=self.split_mode, value="split",
-                       font=FONT_SM, bg=BG2, cursor="hand2").pack(side="left")
+                       font=FONT_SM, bg=BG2, fg=TEXT, cursor="hand2").pack(side="left")
         tk.Radiobutton(mr, text="Join", variable=self.split_mode, value="join",
-                       font=FONT_SM, bg=BG2, cursor="hand2").pack(side="left", padx=12)
+                       font=FONT_SM, bg=BG2, fg=TEXT, cursor="hand2").pack(side="left", padx=12)
         self.split_file_var = tk.StringVar()
         r1 = tk.Frame(c, bg=BG2); r1.pack(fill="x", pady=(0,4))
         tk.Entry(r1, textvariable=self.split_file_var, font=FONT_SM, width=22,
-                 relief="solid", bd=1).pack(side="left", fill="x", expand=True, ipady=3)
+                 relief="solid", bd=1, bg="white", fg="black", insertbackground="black").pack(side="left", fill="x", expand=True, ipady=3)
         tk.Button(r1, text="Browse", font=FONT_SM, relief="solid", bd=1, padx=6, cursor="hand2",
+                  bg="#e8e8e8", fg="black", activebackground="#d0d0d0", activeforeground="black",
                   command=lambda: self.split_file_var.set(filedialog.askopenfilename() or self.split_file_var.get())
                   ).pack(side="left", padx=(4,0))
         sr = tk.Frame(c, bg=BG2); sr.pack(fill="x", pady=(0,4))
-        tk.Label(sr, text="Chunk size:", font=FONT_SM, bg=BG2).pack(side="left")
+        tk.Label(sr, text="Chunk size:", font=FONT_SM, bg=BG2, fg=TEXT).pack(side="left")
         self.split_size = tk.StringVar(value="50")
         ttk.Combobox(sr, textvariable=self.split_size, values=["10","25","50","100","200"],
                      font=FONT_SM, width=6, state="readonly").pack(side="left", padx=(4,4))
-        tk.Label(sr, text="MB", font=FONT_SM, bg=BG2).pack(side="left")
-        self.split_result = tk.Label(c, text="", font=FONT_SM, bg=BG2, anchor="w", wraplength=270)
+        tk.Label(sr, text="MB", font=FONT_SM, bg=BG2, fg=TEXT).pack(side="left")
+        self.split_result = tk.Label(c, text="", font=FONT_SM, bg=BG2, fg=TEXT, anchor="w", wraplength=270)
         self.split_result.pack(fill="x", pady=(4,0))
         tk.Button(c, text="Go", font=FONT_B, bg=BLUE, fg="white", relief="flat",
+                  activebackground="#1248a0", activeforeground="white",
                   cursor="hand2", command=self._run_split_join).pack(pady=(4,0), anchor="w")
 
     def _run_split_join(self):
@@ -1912,13 +1982,15 @@ class FileGuardApp:
         self.disk_folder = tk.StringVar(value=str(Path.home()))
         r1 = tk.Frame(c, bg=BG2); r1.pack(fill="x", pady=(0,4))
         tk.Entry(r1, textvariable=self.disk_folder, font=FONT_SM, width=22,
-                 relief="solid", bd=1).pack(side="left", fill="x", expand=True, ipady=3)
+                 relief="solid", bd=1, bg="white", fg="black", insertbackground="black").pack(side="left", fill="x", expand=True, ipady=3)
         tk.Button(r1, text="Browse", font=FONT_SM, relief="solid", bd=1, padx=6, cursor="hand2",
+                  bg="#e8e8e8", fg="black", activebackground="#d0d0d0", activeforeground="black",
                   command=lambda: self.disk_folder.set(filedialog.askdirectory() or self.disk_folder.get())
                   ).pack(side="left", padx=(4,0))
         self.disk_canvas = tk.Canvas(c, bg=BG2, height=110, highlightthickness=0)
         self.disk_canvas.pack(fill="x", pady=(4,0))
         tk.Button(c, text="Analyze", font=FONT_B, bg=BLUE, fg="white", relief="flat",
+                  activebackground="#1248a0", activeforeground="white",
                   cursor="hand2", command=self._run_disk_analyze).pack(pady=(4,0), anchor="w")
 
     def _run_disk_analyze(self):
@@ -1961,16 +2033,18 @@ class FileGuardApp:
         self.diff_b = tk.StringVar()
         for var, label in [(self.diff_a, "File A:"), (self.diff_b, "File B:")]:
             rf = tk.Frame(c, bg=BG2); rf.pack(fill="x", pady=(0,3))
-            tk.Label(rf, text=label, font=FONT_SM, bg=BG2, width=7, anchor="w").pack(side="left")
+            tk.Label(rf, text=label, font=FONT_SM, bg=BG2, fg=TEXT, width=7, anchor="w").pack(side="left")
             tk.Entry(rf, textvariable=var, font=FONT_SM, width=18,
-                     relief="solid", bd=1).pack(side="left", fill="x", expand=True, ipady=3)
+                     relief="solid", bd=1, bg="white", fg="black", insertbackground="black").pack(side="left", fill="x", expand=True, ipady=3)
             tk.Button(rf, text="Browse", font=("Helvetica",10), relief="solid", bd=1, padx=4, cursor="hand2",
+                      bg="#e8e8e8", fg="black", activebackground="#d0d0d0", activeforeground="black",
                       command=lambda v=var: v.set(filedialog.askopenfilename() or v.get())
                       ).pack(side="left", padx=(3,0))
         self.diff_result = scrolledtext.ScrolledText(c, font=("Courier", 10), height=6,
-                                                      bg=BG2, relief="solid", bd=1)
+                                                      bg="white", fg="black", relief="solid", bd=1)
         self.diff_result.pack(fill="both", expand=True, pady=(4,0))
         tk.Button(c, text="Compare", font=FONT_B, bg=BLUE, fg="white", relief="flat",
+                  activebackground="#1248a0", activeforeground="white",
                   cursor="hand2", command=self._run_diff).pack(pady=(4,0), anchor="w")
 
     def _run_diff(self):
