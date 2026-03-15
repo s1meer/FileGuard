@@ -15,7 +15,7 @@ from pathlib import Path
 
 GITHUB_USER    = "YOUR_GITHUB_USERNAME"
 GITHUB_REPO    = "FileGuard"
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "1.1.0"
 VERSION_FILE   = os.path.join(Path.home(), ".fileguard_version.json")
 
 RELEASES_URL = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest"

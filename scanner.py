@@ -119,6 +119,17 @@ def scan_file(path):
     elif result["warnings"]:
         result["risk"] = "low"
 
+    # Safe-to-open verdict
+    def _get_verdict(r):
+        if r['risk'] in ('critical', 'high'):
+            reason = r['threats'][0] if r['threats'] else 'Suspicious content detected'
+            return {'verdict': 'NO', 'color': '#cc2200', 'reason': reason}
+        if r['risk'] == 'medium':
+            reason = r['warnings'][0] if r['warnings'] else 'Warnings found'
+            return {'verdict': 'CAUTION', 'color': '#b8860b', 'reason': reason}
+        return {'verdict': 'YES', 'color': '#2d7a2d', 'reason': 'No threats found'}
+
+    result['verdict'] = _get_verdict(result)
     return result
 
 
