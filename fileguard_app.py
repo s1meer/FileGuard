@@ -24,6 +24,14 @@ try:
 except AttributeError:
     pass
 
+import ssl as _ssl_mod
+import os as _os_mod
+_os_mod.environ['PYTHONHTTPSVERIFY'] = '0'
+try:
+    _ssl_mod._create_default_https_context = _ssl_mod._create_unverified_context
+except AttributeError:
+    pass
+
 # Try tkinterdnd2 for drag and drop — fallback gracefully if not installed
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
@@ -400,7 +408,8 @@ class FileGuardApp:
         tk.Label(f, text="Repair log:", font=FONT_B, bg=BG, fg=TEXT).pack(anchor="w", padx=20, pady=(4,2))
 
         self.repair_log = scrolledtext.ScrolledText(f, font=FONT_SM, height=14,
-                                                     bg=BG2, relief="solid", bd=1,
+                                                     bg="#1e1e1e", fg="#d4d4d4", insertbackground="white",
+                                                     relief="solid", bd=1,
                                                      state="disabled", padx=10, pady=8, wrap="word")
         self.repair_log.pack(fill="both", expand=True, padx=20, pady=(0,8))
 
@@ -524,7 +533,8 @@ class FileGuardApp:
 
         tk.Label(f, text="Download log:", font=FONT_B, bg=BG, fg=TEXT).pack(anchor="w", padx=20, pady=(4,2))
         self.dl_log = scrolledtext.ScrolledText(f, font=FONT_SM, height=12,
-                                                 bg=BG2, relief="solid", bd=1,
+                                                 bg="#1e1e1e", fg="#d4d4d4", insertbackground="white",
+                                                 relief="solid", bd=1,
                                                  state="disabled", padx=10, pady=8, wrap="word")
         self.dl_log.pack(fill="both", expand=True, padx=20, pady=(0,8))
 
@@ -589,84 +599,153 @@ class FileGuardApp:
 
         def run():
             try:
-                DIRECT_EXTS = ('.pdf','.zip','.mp4','.mp3','.docx','.xlsx',
-                               '.pptx','.rar','.7z','.tar','.gz','.png',
-                               '.jpg','.jpeg','.gif','.txt','.csv','.epub',
-                               '.avi','.mkv','.mov','.flac','.wav','.webm')
-                clean_url = url.split('?')[0].lower()
-                is_direct = any(clean_url.endswith(ext) for ext in DIRECT_EXTS)
-
-                if is_direct:
-                    try:
-                        import urllib.request
-                        ctx = ssl.create_default_context()
-                        ctx.check_hostname = False
-                        ctx.verify_mode = ssl.CERT_NONE
-                        filename = url.split('/')[-1].split('?')[0] or 'download'
-                        save_path = os.path.join(out_dir, filename)
-                        req = urllib.request.Request(url, headers={
-                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-                        })
-                        self.q.put(("dl_log", f"Direct download: {url}"))
-                        self.q.put(("dl_log", f"Saving to: {save_path}"))
-                        with urllib.request.urlopen(req, context=ctx) as resp:
-                            total = int(resp.headers.get('Content-Length', 0))
-                            downloaded = 0
-                            with open(save_path, 'wb') as f:
-                                while True:
-                                    chunk = resp.read(16384)
-                                    if not chunk:
-                                        break
-                                    f.write(chunk)
-                                    downloaded += len(chunk)
-                                    if total:
-                                        self.q.put(("dl_progress", int(downloaded/total*100), filename))
-                        self.dl_output_path = save_path
-                        self.q.put(("dl_finished", True))
-                        return
-                    except Exception as de:
-                        self.q.put(("dl_error", str(de)))
-                        return
-
-            except Exception:
-                pass
-
-            try:
-                import yt_dlp
+                import ssl as _ssl
                 ffmpeg_path = get_ffmpeg()
+                self.q.put(("dl_log", f"Starting download..."))
+                self.q.put(("dl_log", f"URL: {url}"))
 
-                fmt_map = {
-                    "Best quality (video+audio)": "bestvideo+bestaudio/best" if ffmpeg_path else "best",
-                    "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best[height<=720]",
-                    "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best[height<=480]",
-                    "360p (small file)": "best[height<=360]/worst",
-                    "Audio only (MP3)":  "bestaudio/best",
-                }
+                clean = url.split('?')[0].lower()
 
-                opts = {
-                    "outtmpl":            os.path.join(out_dir, "%(title)s.%(ext)s"),
-                    "progress_hooks":     [progress_hook],
-                    "quiet":              True,
-                    "no_warnings":        True,
-                    "nocheckcertificate": True,
-                    "format":             fmt_map.get(quality, "best"),
-                }
+                DIRECT_EXTS = (
+                    '.pdf', '.doc', '.docx', '.xls', '.xlsx',
+                    '.ppt', '.pptx', '.zip', '.rar', '.7z',
+                    '.tar', '.gz', '.bz2', '.mp3', '.wav',
+                    '.flac', '.ogg', '.m4a', '.aac', '.epub',
+                    '.mobi', '.txt', '.csv', '.json', '.xml',
+                    '.png', '.jpg', '.jpeg', '.gif', '.bmp',
+                    '.webp', '.tiff', '.svg', '.mp4', '.avi',
+                    '.mkv', '.mov', '.wmv', '.flv', '.webm',
+                )
 
-                if ffmpeg_path:
-                    opts["ffmpeg_location"] = os.path.dirname(ffmpeg_path)
-                    self.q.put(("dl_log", f"ffmpeg: bundled ({os.path.basename(ffmpeg_path)})"))
+                VIDEO_SITES = (
+                    'youtube.com', 'youtu.be', 'twitter.com', 'x.com',
+                    'instagram.com', 'tiktok.com', 'facebook.com',
+                    'vimeo.com', 'dailymotion.com', 'reddit.com',
+                    'twitch.tv', 'soundcloud.com',
+                )
+
+                is_direct = any(clean.endswith(e) for e in DIRECT_EXTS)
+                is_archive_org = 'archive.org/details/' in url
+                is_video = any(s in url for s in VIDEO_SITES)
+
+                if is_archive_org:
+                    self.q.put(("dl_log", "Detected: Internet Archive page"))
+                    self.q.put(("dl_log", "Fetching file list from Archive.org API..."))
+
+                    import urllib.request, json
+                    ctx = _ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = _ssl.CERT_NONE
+
+                    item_id = url.split('archive.org/details/')[-1].split('/')[0].split('?')[0].strip('/')
+                    self.q.put(("dl_log", f"Item ID: {item_id}"))
+
+                    api_url = f"https://archive.org/metadata/{item_id}"
+                    req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+                        data = json.loads(r.read())
+
+                    files = data.get('files', [])
+                    self.q.put(("dl_log", f"Found {len(files)} files in archive"))
+
+                    priority_exts = ['.pdf', '.epub', '.mp4', '.mp3', '.ogg', '.ogv', '.avi', '.mkv', '.flac', '.wav', '.txt', '.djvu']
+                    skip_suffixes = ('_meta.xml', '_files.xml', '_reviews.xml', '.sqlite', '_itemimage.jpg', '.torrent')
+
+                    chosen = None
+                    chosen_name = None
+                    for ext in priority_exts:
+                        for f in files:
+                            name = f.get('name', '')
+                            if any(name.endswith(s) for s in skip_suffixes):
+                                continue
+                            if name.lower().endswith(ext):
+                                chosen_name = name
+                                chosen = f"https://archive.org/download/{item_id}/{name}"
+                                break
+                        if chosen:
+                            break
+
+                    if not chosen:
+                        valid = [f for f in files if not any(f.get('name','').endswith(s) for s in skip_suffixes)]
+                        if valid:
+                            best = max(valid, key=lambda x: int(x.get('size', 0) or 0))
+                            chosen_name = best['name']
+                            chosen = f"https://archive.org/download/{item_id}/{chosen_name}"
+
+                    if not chosen:
+                        self.q.put(("dl_error", "No downloadable files found in this Archive.org item"))
+                        return
+
+                    self.q.put(("dl_log", f"Downloading: {chosen_name}"))
+                    url_to_download = chosen
+
+                    # Fall through to direct download below
+                    self._do_direct_download(url_to_download, out_dir)
+
+                elif is_direct:
+                    fname = url.split('/')[-1].split('?')[0]
+                    self.q.put(("dl_log", f"Direct file: {fname}"))
+                    self._do_direct_download(url, out_dir)
+
+                elif is_video:
+                    self.q.put(("dl_log", "Video site detected — using yt-dlp"))
+
+                    fmt_map = {
+                        "Best quality (video+audio)":
+                            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+                        "720p":
+                            "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]",
+                        "480p":
+                            "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]",
+                        "360p (small file)": "best[height<=360]/worst",
+                        "Audio only (MP3)": "bestaudio/best",
+                    }
+
+                    opts = {
+                        "outtmpl":              os.path.join(out_dir, "%(title)s.%(ext)s"),
+                        "progress_hooks":       [progress_hook],
+                        "quiet":                True,
+                        "no_warnings":          True,
+                        "nocheckcertificate":   True,
+                        "format":               fmt_map.get(quality, "best"),
+                        "merge_output_format":  "mp4",
+                    }
+
+                    if ffmpeg_path and os.path.exists(ffmpeg_path):
+                        opts["ffmpeg_location"] = os.path.dirname(ffmpeg_path)
+                        self.q.put(("dl_log", "ffmpeg: bundled"))
+                    else:
+                        opts["format"] = "best[ext=mp4]/best"
+                        self.q.put(("dl_log", "ffmpeg not found — using single-file format"))
+
+                    if quality == "Audio only (MP3)" and ffmpeg_path:
+                        opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}]
+
+                    import yt_dlp
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        ydl.download([url])
+                    self.q.put(("dl_finished", True))
+
                 else:
-                    self.q.put(("dl_log", "ffmpeg: not found, using compatible format"))
+                    # Unknown URL — try direct first, then yt-dlp
+                    self.q.put(("dl_log", "Unknown URL type — trying direct download..."))
+                    try:
+                        self._do_direct_download(url, out_dir)
+                    except Exception as e1:
+                        self.q.put(("dl_log", f"Direct failed ({e1}) — trying yt-dlp..."))
+                        import yt_dlp
+                        opts = {
+                            "outtmpl": os.path.join(out_dir, "%(title)s.%(ext)s"),
+                            "progress_hooks": [progress_hook],
+                            "quiet": True,
+                            "no_warnings": True,
+                            "nocheckcertificate": True,
+                            "format": "best",
+                        }
+                        with yt_dlp.YoutubeDL(opts) as ydl:
+                            ydl.download([url])
+                        self.q.put(("dl_finished", True))
 
-                if quality == "Audio only (MP3)" and ffmpeg_path:
-                    opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}]
-
-                self.q.put(("dl_log", f"Downloading from: {url}"))
-                self.q.put(("dl_log", f"Quality: {quality}"))
-                self.q.put(("dl_log", f"Saving to: {out_dir}"))
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    ydl.download([url])
-                self.q.put(("dl_finished", True))
             except Exception as e:
                 self.q.put(("dl_error", str(e)))
 
@@ -893,6 +972,8 @@ class FileGuardApp:
                 elif kind == "dl_log":
                     self.dl_log.config(state="normal")
                     self.dl_log.insert("end", msg[1] + "\n")
+                    self.dl_log.tag_add("msg", "1.0", "end")
+                    self.dl_log.tag_config("msg", foreground="#d4d4d4")
                     self.dl_log.see("end")
                     self.dl_log.config(state="disabled")
 
@@ -1145,6 +1226,7 @@ class FileGuardApp:
         text_exts  = {'.txt','.py','.js','.html','.css','.json','.xml',
                       '.csv','.md','.sh','.bat','.log','.yaml','.toml'}
         archive_exts = {'.zip','.rar','.7z','.tar','.gz','.bz2'}
+        doc_exts = {'.docx', '.xlsx', '.pptx', '.epub'}
         size_kb = round(os.path.getsize(path) / 1024, 1)
         self.preview_canvas.pack(fill="both", expand=True)
         self.preview_text.pack_forget()
@@ -1153,6 +1235,21 @@ class FileGuardApp:
             self.preview_info.config(text=f"Image \u2014 {size_kb} KB \u2014 {path}")
         elif ext == '.pdf':
             self._preview_pdf(path)
+        elif ext == '.docx':
+            self._preview_docx(path)
+            self.preview_info.config(text=f"Word document \u2014 {size_kb} KB \u2014 {path}")
+        elif ext == '.doc':
+            self._preview_message(
+                f"Legacy Word Document (.doc)\n{'─'*50}\n"
+                f"File: {os.path.basename(path)}\n"
+                f"Size: {size_kb} KB\n\n"
+                "This is an older Office format (pre-2007).\n"
+                "Click 'Open File' to view in Word, Pages, or LibreOffice.\n\n"
+                "Use the Repair tab to check file integrity.")
+            self.preview_info.config(text=f".doc (legacy Word) \u2014 {size_kb} KB \u2014 {path}")
+        elif ext in doc_exts:
+            self._preview_docx(path)
+            self.preview_info.config(text=f"Document \u2014 {size_kb} KB \u2014 {path}")
         elif ext in audio_exts or ext in video_exts:
             self._preview_media(path)
             self.preview_info.config(text=f"Media file \u2014 {size_kb} KB \u2014 {path}")
@@ -1272,12 +1369,95 @@ class FileGuardApp:
             self._preview_message(f"Cannot read file: {e}")
 
     def _preview_message(self, text):
-        self.preview_canvas.pack_forget()
-        self.preview_text.pack(fill="both", expand=True)
-        self.preview_text.config(state="normal")
-        self.preview_text.delete("1.0", "end")
-        self.preview_text.insert("1.0", text)
-        self.preview_text.config(state="disabled")
+        """Show text message in the preview pane."""
+        # Hide canvas, show text widget
+        if hasattr(self, 'preview_canvas'):
+            self.preview_canvas.pack_forget()
+        if hasattr(self, 'preview_text'):
+            self.preview_text.pack(fill="both", expand=True, padx=6, pady=6)
+            self.preview_text.config(state="normal", bg="white", fg="black")
+            self.preview_text.delete("1.0", "end")
+            self.preview_text.insert("1.0", text)
+            self.preview_text.config(state="disabled")
+
+    def _preview_docx(self, path):
+        try:
+            import zipfile, xml.etree.ElementTree as ET
+            size = os.path.getsize(path)
+            size_str = f"{round(size/1024/1024,1)} MB" if size > 1e6 else f"{round(size/1024,1)} KB"
+
+            with zipfile.ZipFile(path) as z:
+                if 'word/document.xml' not in z.namelist():
+                    self._preview_message(f"DOCX: {os.path.basename(path)}\nSize: {size_str}\n\nCould not read document XML.\nClick 'Open File' to view in Word/Pages.")
+                    return
+
+                xml_data = z.read('word/document.xml')
+                root = ET.fromstring(xml_data)
+
+                lines = []
+                for para in root.iter():
+                    if para.tag.endswith('}p'):
+                        words = [elem.text for elem in para.iter()
+                                 if elem.tag.endswith('}t') and elem.text]
+                        if words:
+                            lines.append(''.join(words))
+
+                content = '\n'.join(lines)
+                if not content.strip():
+                    self._preview_message(f"DOCX: {os.path.basename(path)}\nSize: {size_str}\n\nDocument appears empty.\nClick 'Open File' to view.")
+                    return
+
+                header = f"DOCUMENT — {os.path.basename(path)} ({size_str})\n{'─'*60}\n\n"
+                preview = content[:8000] + ("\n\n[... continues ...]" if len(content) > 8000 else "")
+                self._preview_message(header + preview)
+        except Exception as e:
+            self._preview_message(f"DOCX preview error: {e}\n\nClick 'Open File' to view.")
+
+    def _preview_pdf_info(self, path):
+        try:
+            size = os.path.getsize(path)
+            size_str = f"{round(size/1024/1024,1)} MB" if size > 1e6 else f"{round(size/1024,1)} KB"
+
+            # Try pdf2image first for visual preview
+            try:
+                from pdf2image import convert_from_path
+                imgs = convert_from_path(path, first_page=1, last_page=1, dpi=100, poppler_path='/opt/homebrew/bin')
+                if imgs:
+                    self._preview_image_pil(imgs[0])
+                    return
+            except Exception:
+                pass
+
+            # Fallback: info text
+            import pikepdf
+            with pikepdf.open(path) as pdf:
+                pages = len(pdf.pages)
+
+            self._preview_message(
+                f"PDF DOCUMENT\n{'─'*60}\n"
+                f"File:  {os.path.basename(path)}\n"
+                f"Pages: {pages}\n"
+                f"Size:  {size_str}\n\n"
+                f"Click 'Open File' to view in Preview app.")
+        except Exception as e:
+            self._preview_message(f"PDF: {os.path.basename(path)}\n\nError: {e}\n\nClick 'Open File' to open.")
+
+    def _preview_image_pil(self, pil_img):
+        """Show a PIL image object in the preview canvas."""
+        try:
+            from PIL import ImageTk
+            self.preview_canvas.pack(fill="both", expand=True)
+            self.preview_text.pack_forget()
+            self.preview_canvas.update_idletasks()
+            cw = max(self.preview_canvas.winfo_width(), 400)
+            ch = max(self.preview_canvas.winfo_height(), 300)
+            pil_img.thumbnail((cw, ch))
+            photo = ImageTk.PhotoImage(pil_img)
+            self.preview_canvas.delete("all")
+            self.preview_canvas.create_image(cw//2, ch//2, image=photo, anchor="center")
+            self.preview_canvas._photo = photo
+        except Exception as e:
+            self._preview_message(f"Could not display image: {e}")
 
     # ── CONVERT TAB ────────────────────────────────────────────────────────
 
@@ -1570,7 +1750,8 @@ class FileGuardApp:
 
         tk.Label(f, text="Extracted text:", font=FONT_B, bg=BG, fg=TEXT).pack(anchor="w", padx=20, pady=(8,2))
         self.ocr_result = scrolledtext.ScrolledText(f, font=FONT_SM, height=10,
-                                                     bg=BG2, relief="solid", bd=1,
+                                                     bg="white", fg="black", insertbackground="black",
+                                                     relief="solid", bd=1,
                                                      padx=10, pady=8, wrap="word")
         self.ocr_result.pack(fill="both", expand=True, padx=20, pady=(0,8))
 
@@ -2089,6 +2270,58 @@ class FileGuardApp:
                 self.diff_result.insert("end", line)
 
     # ── Utilities ─────────────────────────────────────────
+
+    def _do_direct_download(self, url, out_dir):
+        """Download any direct file URL with progress."""
+        import ssl, urllib.request
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        fname = url.split('/')[-1].split('?')[0]
+        if not fname or '.' not in fname:
+            fname = 'download'
+        save_path = os.path.join(out_dir, fname)
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'Accept': '*/*',
+        }
+
+        req = urllib.request.Request(url, headers=headers)
+        self.q.put(("dl_log", "Connecting..."))
+
+        with urllib.request.urlopen(req, context=ctx, timeout=60) as response:
+            cd = response.headers.get('Content-Disposition', '')
+            if 'filename=' in cd:
+                import re
+                m = re.search(r'filename=["\']?([^"\';\s]+)', cd)
+                if m:
+                    fname = m.group(1)
+                    save_path = os.path.join(out_dir, fname)
+
+            total = int(response.headers.get('Content-Length', 0))
+            size_str = f"{round(total/1024/1024,1)} MB" if total > 1e6 else f"{round(total/1024,1)} KB" if total else "unknown size"
+            self.q.put(("dl_log", f"File: {fname}  ({size_str})"))
+
+            downloaded = 0
+            with open(save_path, 'wb') as f:
+                while True:
+                    chunk = response.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        pct = int(downloaded / total * 100)
+                        done_mb = round(downloaded/1024/1024, 1)
+                        total_mb = round(total/1024/1024, 1)
+                        self.q.put(("dl_progress", pct, f"{fname} — {done_mb}/{total_mb} MB"))
+
+        self.dl_output_path = save_path
+        self.q.put(("dl_log", f"Saved: {save_path}"))
+        self.q.put(("dl_finished", True))
 
     def _open_path(self, path):
         system = platform.system()

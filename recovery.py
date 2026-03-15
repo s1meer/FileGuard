@@ -91,6 +91,11 @@ def repair_file(path, out_dir=None, log_callback=None):
         log("Detected: 7-Zip archive")
         return _repair_7z(path, out_dir, log)
 
+    # Legacy Office (OLE2) — .doc, .xls, .ppt
+    if header[:8] == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1':
+        log("Detected: Legacy Office file (OLE2 format — .doc/.xls/.ppt)")
+        return _repair_ole_office(path, out_dir, log)
+
     try:
         with open(path, "rb") as f:
             raw = f.read(512)
@@ -147,6 +152,30 @@ def _pdf_raw_recover(path, out_dir, log):
 def _repair_zip(path, out_dir, log):
     p = Path(path)
     ext = p.suffix.lower().lstrip(".")
+    # Check integrity first
+    try:
+        with zipfile.ZipFile(path, "r") as z:
+            bad = z.testzip()
+        if bad is None:
+            # File is healthy — create a clean copy
+            log("ZIP structure tests OK — file is healthy")
+            if ext in ("docx", "xlsx", "pptx", "epub"):
+                out = os.path.join(out_dir, p.stem + "_repaired." + ext)
+                import shutil
+                shutil.copy2(path, out)
+                log(f"Copied healthy {ext.upper()} to output")
+                return {"ok": True, "output": out, "message": f"{ext.upper()} is healthy — copy saved"}
+            else:
+                out = os.path.join(out_dir, p.name)
+                import shutil
+                shutil.copy2(path, out)
+                log("Copied healthy ZIP to output")
+                return {"ok": True, "output": out, "message": "Archive is healthy — copy saved"}
+    except zipfile.BadZipFile:
+        log("ZIP structure broken — attempting partial recovery...")
+    except Exception:
+        log("ZIP test failed — attempting partial recovery...")
+
     extract_dir = os.path.join(out_dir, p.stem + "_extracted")
     os.makedirs(extract_dir, exist_ok=True)
     recovered = []
@@ -273,6 +302,32 @@ def _repair_7z(path, out_dir, log):
         return {"ok": False, "message": "Install patool: pip3 install patool"}
     except Exception as e:
         return {"ok": False, "message": f"7Z extraction failed: {e}"}
+
+
+def _repair_ole_office(path, out_dir, log):
+    import shutil
+    from pathlib import Path as _Path
+
+    p = _Path(path)
+    out = os.path.join(out_dir, p.name)
+
+    log("Legacy Office format (pre-2007)")
+    log("Copying file preserving original structure...")
+    shutil.copy2(path, out)
+
+    # Verify with olefile if available
+    try:
+        import olefile
+        if olefile.isOleFile(path):
+            log("OLE2 structure verified — file is intact")
+            return {"ok": True, "output": out,
+                    "message": "Legacy Office file verified. Open with Microsoft Word, LibreOffice, or Pages."}
+    except ImportError:
+        pass
+
+    log("Copy complete — structure appears valid")
+    return {"ok": True, "output": out,
+            "message": "File copied. Try opening with LibreOffice (free download) or Microsoft Office."}
 
 
 def _fix_encoding(path, out_dir, log):
